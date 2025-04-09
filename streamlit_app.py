@@ -1,151 +1,64 @@
 import streamlit as st
 import pandas as pd
-import math
+import plotly.express as px
 from pathlib import Path
 
-# Set the title and favicon that appear in the Browser's tab bar.
+# 페이지 설정
 st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+    page_title='Water Quality Dashboard',
+    page_icon='💧',
 )
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
-
+# 데이터 불러오기
 @st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+def load_data():
+    file_paths = [
+        "data/Johnstone_river_coquette_point_joined.csv",
+        "data/Johnstone_river_innisfail_joined.csv",
+        "data/Mulgrave_river_deeral_joined.csv",
+        "data/Pioneer_Dumbleton_joined.csv",
+        "data/Plane_ck_sucrogen_joined.csv",
+        "data/Proserpine_river_glen_isla_joined.csv",
+        "data/russell_river_east_russell_joined.csv",
+        "data/sandy_ck_homebush_joined.csv",
+        "data/sandy_ck_sorbellos_road_joined.csv",
+        "data/Tully_river_euramo_joined.csv"
+    ]
+    
+    dfs = []
+    for path in file_paths:
+        df = pd.read_csv(path, parse_dates=["Timestamp"])
+        df["Site"] = Path(path).stem.replace("_joined", "")
+        dfs.append(df)
+        
+    all_data = pd.concat(dfs, ignore_index=True)
+    return all_data
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+df = load_data()
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# 최근 30일 데이터만 필터링
+df = df[df['Timestamp'] >= df['Timestamp'].max() - pd.Timedelta(days=30)]
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# 지점 선택
+sites = df['Site'].unique()
+selected_sites = st.multiselect('측정 지점 선택', sites, default=sites[:3])
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+# 수질 파라미터 선택
+parameters = ['Conductivity', 'NO3', 'Temp', 'Turbidity', 'Level']
+selected_param = st.selectbox('수질 지표 선택', parameters)
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+# 필터링된 데이터
+df_filtered = df[df['Site'].isin(selected_sites)]
 
-    return gdp_df
+# 시각화
+st.header(f"{selected_param} 추이 (최근 1개월)")
+fig = px.line(df_filtered, x="Timestamp", y=selected_param, color="Site")
+st.plotly_chart(fig, use_container_width=True)
 
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# 지점별 평균값
+st.header(f"지점별 평균 {selected_param}")
+cols = st.columns(len(selected_sites))
+for i, site in enumerate(selected_sites):
+    avg_value = df_filtered[df_filtered["Site"] == site][selected_param].mean()
+    with cols[i]:
+        st.metric(label=site, value=f"{avg_value:.2f}")
